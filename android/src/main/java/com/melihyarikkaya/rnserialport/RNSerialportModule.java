@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.felhr.utils.ProtocolBuffer;
 import com.google.common.primitives.UnsignedBytes;
 
 import android.hardware.usb.UsbDevice;
@@ -98,6 +99,9 @@ public class RNSerialportModule extends ReactContextBaseJavaModule {
 
 
   private boolean usbServiceStarted = false;
+
+  private ProtocolBuffer protocolBuffer;
+  private String delimiter;
 
   private final BroadcastReceiver mUsbReceiver = new BroadcastReceiver() {
     @Override
@@ -186,6 +190,10 @@ public class RNSerialportModule extends ReactContextBaseJavaModule {
   /******************************* BEGIN PUBLIC SETTER METHODS **********************************/
 
   @ReactMethod
+  public void setDelimiter(String delimiter) {
+    this.delimiter = delimiter;
+  }
+  @ReactMethod
   public void setDataBit(int DATA_BIT) {
     this.DATA_BIT = DATA_BIT;
   }
@@ -245,6 +253,12 @@ public class RNSerialportModule extends ReactContextBaseJavaModule {
     if(usbServiceStarted) {
       return;
     }
+    if (returnedDataType == Definitions.RETURNED_DATA_TYPE_INTARRAY) {
+      protocolBuffer = new ProtocolBuffer(ProtocolBuffer.BINARY);
+    } else {
+      protocolBuffer = new ProtocolBuffer(ProtocolBuffer.TEXT);
+    }
+    protocolBuffer.setDelimiter(delimiter);
     setFilters();
 
     usbManager = (UsbManager) reactContext.getSystemService(Context.USB_SERVICE);
@@ -595,30 +609,62 @@ public class RNSerialportModule extends ReactContextBaseJavaModule {
   private UsbSerialInterface.UsbReadCallback mCallback = new UsbSerialInterface.UsbReadCallback() {
     @Override
     public void onReceivedData(byte[] bytes) {
-      try {
 
-        String payloadKey = "payload";
+      String payloadKey = "payload";
 
-        WritableMap params = Arguments.createMap();
+      if (delimiter != null) {
+        protocolBuffer.appendData(bytes);
+        while (protocolBuffer.hasMoreCommands()) {
+          try {
 
-        if(returnedDataType == Definitions.RETURNED_DATA_TYPE_INTARRAY) {
+            WritableMap params = Arguments.createMap();
 
-          WritableArray intArray = new WritableNativeArray();
-          for(byte b: bytes) {
-            intArray.pushInt(UnsignedBytes.toInt(b));
+            if (returnedDataType == Definitions.RETURNED_DATA_TYPE_INTARRAY) {
+
+              WritableArray intArray = new WritableNativeArray();
+              for (byte b : protocolBuffer.nextBinaryCommand()) {
+                intArray.pushInt(UnsignedBytes.toInt(b));
+              }
+              params.putArray(payloadKey, intArray);
+
+            } else if (returnedDataType == Definitions.RETURNED_DATA_TYPE_HEXSTRING) {
+              String hexString = protocolBuffer.nextTextCommand();
+              params.putString(payloadKey, hexString);
+            } else
+              return;
+
+            eventEmit(onReadDataFromPort, params);
+
+          } catch (Exception err) {
+            eventEmit(onErrorEvent, createError(Definitions.ERROR_NOT_READED_DATA, Definitions.ERROR_NOT_READED_DATA_MESSAGE + " System Message: " + err.getMessage()));
           }
-          params.putArray(payloadKey, intArray);
+        }
+      } else {
 
-        } else if(returnedDataType == Definitions.RETURNED_DATA_TYPE_HEXSTRING) {
-          String hexString = Definitions.bytesToHex(bytes);
-          params.putString(payloadKey, hexString);
-        } else
-          return;
+        try {
 
-        eventEmit(onReadDataFromPort, params);
 
-      } catch (Exception err) {
-        eventEmit(onErrorEvent, createError(Definitions.ERROR_NOT_READED_DATA, Definitions.ERROR_NOT_READED_DATA_MESSAGE + " System Message: " + err.getMessage()));
+          WritableMap params = Arguments.createMap();
+
+          if (returnedDataType == Definitions.RETURNED_DATA_TYPE_INTARRAY) {
+
+            WritableArray intArray = new WritableNativeArray();
+            for (byte b : bytes) {
+              intArray.pushInt(UnsignedBytes.toInt(b));
+            }
+            params.putArray(payloadKey, intArray);
+
+          } else if (returnedDataType == Definitions.RETURNED_DATA_TYPE_HEXSTRING) {
+            String hexString = Definitions.bytesToHex(bytes);
+            params.putString(payloadKey, hexString);
+          } else
+            return;
+
+          eventEmit(onReadDataFromPort, params);
+
+        } catch (Exception err) {
+          eventEmit(onErrorEvent, createError(Definitions.ERROR_NOT_READED_DATA, Definitions.ERROR_NOT_READED_DATA_MESSAGE + " System Message: " + err.getMessage()));
+        }
       }
     }
   };
